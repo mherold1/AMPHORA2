@@ -22,6 +22,8 @@ use strict;
 use Bio::TreeIO;
 use Getopt::Long;
 use Bio::DB::Taxonomy;
+use Parallel::ForkManager;
+use Cwd;
 $Bio::Root::Root::DEBUG = -1;
 
 my $AMPHORA_home = $ENV{'AMPHORA2_home'};
@@ -30,6 +32,8 @@ my $method = 'ml';
 my (%markerlist, %taxonid) = ();
 my ($CPUs, $help) = undef;
 my $output = undef;
+my $idir = cwd();
+
 
 my $usage = qq~
 This tool will assign each identified marker sequence a phylotype using the evolutionary placment algorithm of raxml 
@@ -39,12 +43,14 @@ Usage: $0 <options>
 Options:
 	-Method: use 'maximum likelihood' (ml) or 'maximum parsimony' (mp) for phylotyping. Default: ml
 	-CPUs: turn on the multiple thread option and specify the number of CPUs/cores to use. If your computer has multiple CPUs/cores, you can speed up the phylotyping process by running this script on multiple cores. Important: Make sure raxmlHPC-PTHREADs is installed. If the number specified here is larger than the number of cores that are free and available, it will actually slow down the script.
+	-Outindexdir: Directory for the generated index files for the taxonomy db. Default current working directory. 
 	-Help: print help;  
 ~;
 
 
 GetOptions (	'Method=s'=>\$method,
 		'CPUs=i'=>\$CPUs,
+		'Outindexdir=s'=>\$idir,
 		'Help'=>\$help) || die "Invalid command line options\n";
 
 die $usage if $help;
@@ -53,10 +59,17 @@ if ($CPUs and $CPUs == 1) {
 	die "CPUs has to be greater than 1";
 }
 
+my $MAX_PROCESSES = 1;
+if($CPUs){
+    $MAX_PROCESSES = $CPUs;
+}
+
+my $pm = new Parallel::ForkManager($MAX_PROCESSES);
 
 my $tree_functions = new Bio::Tree::Tree(); 
 my $taxdb = Bio::DB::Taxonomy->new(	-source   => 'flatfile',
-					-directory=>$tax_dir,
+
+  -directory=>$idir,
 					-nodesfile => "$tax_dir/nodes.dmp",
 					-namesfile => "$tax_dir/names.dmp");
 
@@ -67,6 +80,7 @@ for (@rank) {
 }
 
 get_marker_list();
+run_raxml();
 assign_phylotype();
 
 
@@ -82,18 +96,61 @@ sub get_marker_list {
 	close IN;
 }
 
+
+sub run_raxml {
+    print STDERR "STATUS: Running $MAX_PROCESSES raxml processes in parallel ...\n";
+    #get_contig_taxonid();
+    #cleanup();
+
+	my $raxml = "raxmlHPC";
+# Commented out by Cedric C. Laczny on Thu May 14 10:14:49 CEST 2015
+# The raxmlHPC-PTHREADS binary did - for whatever reason - not run as multiple threads
+# The CPU usage only displayed at most 100% despite providing up to 12 available cores
+# The individual raxml runs are independent and could thus be trivially parallelized
+# 	if ($CPUs) {
+# 		$raxml = "raxmlHPC-PTHREADS -T $CPUs";
+# 	}
+# 	else {
+# 		$raxml = "raxmlHPC";
+# 	}
+
+	
+MARKER:for my $marker (keys %markerlist) {	
+        my $pid = $pm->start and next;  # Fork; the parent loops to do the next host and the child does the following:
+        #next MARKER unless (-e "$marker.aln");
+		$pm->finish unless (-e "$marker.aln");
+		if (-e "$marker.phylotype") {
+			print STDERR "$marker has been assigned phylotypes; skipped...\nTo reassign phylotypes, delete the file $marker.phylotype\n\n";
+            #next MARKER;
+			$pm->finish;
+		}
+        #my (%confidence, %support) = ();
+		if ($method eq 'mp') {
+			system ("$raxml -f y -t $AMPHORA_home/Marker/$marker.tre -s $marker.aln -m PROTGAMMAWAG -n $marker -p 132 1>/dev/null 2>/dev/null");
+		}
+		else {
+			my $count = 0;
+			open (IN, "$marker.aln") ||die "cant open $marker.aln";
+			while (<IN>) {
+				$count++ if /REF-/; 
+			}
+			close IN;
+			
+			my $fh = 25/$count;
+			$fh = 0.99 if ($fh >= 1);
+			system ("$raxml -s $marker.aln -f v -G $fh -t $AMPHORA_home/Marker/$marker.tre -m PROTCATIWAG -n $marker 1>/dev/null 2>/dev/null");
+		}
+        $pm->finish; # Terminate the child process
+	}
+    $pm->wait_all_children;
+
+    print STDERR "done (raxml).\n";
+}
+
 sub assign_phylotype {
-	get_contig_taxonid();
-	cleanup();
-
-	my $raxml;
-	if ($CPUs) {
-		$raxml = "raxmlHPC-PTHREADS -T $CPUs";
-	}
-	else {
-		$raxml = "raxmlHPC";
-	}
-
+    print STDERR "INFO: Assigning phylotypes ...\n";
+    get_contig_taxonid();
+    #cleanup();
 	
 MARKER:for my $marker (keys %markerlist) {	
 		next MARKER unless (-e "$marker.aln");
@@ -104,7 +161,6 @@ MARKER:for my $marker (keys %markerlist) {
 		my (%confidence, %support) = ();
 		$output = undef;
 		if ($method eq 'mp') {
-			system ("$raxml -f y -t $AMPHORA_home/Marker/$marker.tre -s $marker.aln -m PROTGAMMAWAG -n $marker -p 132 1>/dev/null 2>/dev/null");
 			open (IN, "RAxML_equallyParsimoniousPlacements.$marker") || die "Cannot open RAxML_equallyParsimoniousPlacements.$marker";
 			while (<IN>) {
 				chop;
@@ -122,17 +178,6 @@ MARKER:for my $marker (keys %markerlist) {
 			}	
 		}
 		else {
-			my $count = 0;
-			open (IN, "$marker.aln") ||die "cant open $marker.aln";
-			while (<IN>) {
-				$count++ if /REF-/; 
-			}
-			close IN;
-			
-			my $fh = 25/$count;
-			$fh = 0.99 if ($fh >= 1);
-			system ("$raxml -s $marker.aln -f v -G $fh -t $AMPHORA_home/Marker/$marker.tre -m PROTCATIWAG -n $marker 1>/dev/null 2>/dev/null");
-			
 			unless (-e "RAxML_classificationLikelihoodWeights.$marker") {
 				print STDERR "Error occured when assigning phylotype for $marker\n";
 				next MARKER;
@@ -179,12 +224,12 @@ MARKER:for my $marker (keys %markerlist) {
 		open (OUT, ">$marker.phylotype") || die "cannot open $marker.phylotype to write";
 		print OUT $output;
 		close OUT;
-		cleanup();
 	}
+    cleanup();
 	print "Query\tMarker\tSuperkingdom\tPhylum\tClass\tOrder\tFamily\tGenus\tSpecies\n";
 	system ("cat *.phylotype");	
+    print STDERR "done (phylotype).\n";
 }
-
 
 sub get_contig_taxonid {
 	open (IN, "$AMPHORA_home/Taxonomy/contig.taxonid") || die "Can't open $AMPHORA_home/Taxonomy/contig.taxonid\n";
@@ -242,5 +287,7 @@ sub assign {
 }
 	 
 sub cleanup {
+    print STDERR "Running cleanup.\n";
 	system ("rm RAxML* 2>/dev/null; rm *aln.reduced 2>/dev/null");
+    print STDERR "done (cleanup).\n";
 }

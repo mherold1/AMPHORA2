@@ -21,6 +21,8 @@
 use strict;
 use Bio::SeqIO;
 use Getopt::Long;
+use Cwd;
+use File::Basename;
 
 my $AMPHORA_home = $ENV{'AMPHORA2_home'};
 my (%markerlist, %seq) = ();
@@ -29,6 +31,7 @@ my $evalue = 1e-7;
 my $ref_dir = "$AMPHORA_home/Marker/";
 my ($is_dna, $is_bacteria, $is_archaea) = undef;
 $Bio::Root::Root::DEBUG = -1;
+my $out_dir = cwd();
 
 my $usage = qq~
 This tool will search for bacterial and archaeal phylogenetic markers for a given fasta sequence file.
@@ -46,7 +49,8 @@ Options:
 	-Bacteria: input sequences are Bacterial sequences
 	-Archaea: input sequences are Archaeal sequences
 	-ReferenceDirectory: the file directory that contain the reference alignments, hmms and masks. Default: $AMPHORA_home/Marker
-	-Help: print help;
+	-Help: print help
+	-Outdir: Output dir for files created in this step. Default: current working directory;
 ~;
 
 
@@ -56,6 +60,7 @@ GetOptions (	'DNA'=>\$is_dna,
 		'Bacteria'=>\$is_bacteria,
 		'Archaea'=>\$is_archaea,
 		'ReferenceDirectory=s'=>\$ref_dir,
+		'Outdir=s'=>\$out_dir,
 		'Help'=>\$help) || die "Invalid command line options\n";
 
 die $usage if $help;
@@ -71,10 +76,11 @@ elsif ($is_archaea) {
 }
 
 my $input_seq = $ARGV[0];
+my $output_seq = "$out_dir/".basename($input_seq).".orf";
 
 if ($is_dna) {
-	system ("getorf -sequence $ARGV[0] -outseq $ARGV[0].orf -table 1 -minsize 100");
-	$input_seq = "$ARGV[0].orf";
+	system ("getorf -sequence $ARGV[0] -outseq $output_seq -table 1 -minsize 100");
+	$input_seq = "$output_seq";
 }
 
 # HMM search
@@ -125,7 +131,8 @@ sub get_hmm_hits {
 	}
 	
 	for my $marker (keys %hits) {
-		my $seqout = new Bio::SeqIO('-file'=>">>$marker.pep",'-format'=>'fasta');
+		my $seqout = new Bio::SeqIO('-file'=>">>$out_dir/$marker.pep",'-format'=>'fasta');
+		#   print "marker: $marker\n";
 		for my $seqid (keys %{$hits{$marker}}) {
 			$seqout->write_seq($seq{$seqid});
 		}

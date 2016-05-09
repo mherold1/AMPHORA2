@@ -23,6 +23,7 @@ use Bio::AlignIO;
 use Bio::SimpleAlign;
 use Bio::SeqIO;
 use Getopt::Long;
+use Parallel::ForkManager;
 $Bio::Root::Root::DEBUG = -1;
 
 
@@ -40,10 +41,11 @@ Options:
 	-Directory:	the file directory where sequences to be aligned are located. Default: current directory
 	-OutputFormat:  output alignment format. Default: phylip. Other supported formats include: fasta, stockholm, selex, clustal
 	-WithReference:  keep the reference sequences in the alignment. Default: no
+	-CPUs:  Run as many hmmalign jobs in parallel as specified. Default: 1 
 	-Help:		print help 
 ~;
 
-my ($trim, $help, $with_ref) = undef;
+my ($trim, $help, $with_ref, $CPUs) = undef;
 my $dir = ".";
 my $cutoff = 0.4;
 my $ref_dir = "$AMPHORA_home/Marker";
@@ -58,15 +60,30 @@ GetOptions (	'Trim'=>\$trim,
 		'Directory=s'=>\$dir,
 		'OutputFormat=s'=>\$format,
 		'WithReference'=>\$with_ref,
+		'CPUs=i'=>\$CPUs,
 		'Help'=>\$help) || die "Invalid command line options\n";
 
 die $usage if $help;
 die $usage unless ("-e $ref_dir/marker.list");
 
+if ($CPUs and $CPUs == 1) {
+	die "CPUs has to be greater than 1";
+}
+if(not $CPUs) {
+    $CPUs = 1;
+}
+
+
+my $pm = new Parallel::ForkManager($CPUs);
+
 get_marker_list();
 
+print STDOUT "STATUS: Running $CPUs alignments in parallel ...\n";
+
 for my $marker (keys %markerlist) {
-	next unless (-e "$dir/$marker.pep");
+    my $pid = $pm->start and next;  # Fork; the parent loops to do the next host and the child does the following:
+    #next unless (-e "$dir/$marker.pep");
+	$pm->finish unless (-e "$dir/$marker.pep");
 	print STDERR "Aligning $marker ...\n";
 	$alignment = new Bio::SimpleAlign();
 	(%imprint, %mask, @output_seq) = ();
@@ -74,8 +91,10 @@ for my $marker (keys %markerlist) {
 	align($marker);
 	trim();
 	output($marker);
-	clean();
+    clean();
+    $pm->finish; # Terminate the child process
 }
+$pm->wait_all_children;
 
 
 
