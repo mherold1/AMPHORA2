@@ -1,0 +1,8 @@
+prepend-path    PERL5LIB    /home/users/claczny/perl5/lib/perl5
+module load bio/HMMER/3.1b1-goolf-1.4.10
+module load lang/Perl/5.16.3-goolf-1.4.10
+module load bio/BioPerl/1.6.1-goolf-1.4.10-Perl-5.16.3
+module load bio/EMBOSS/6.6.0-goolf-1.4.10
+prepend-path    PATH    /work/projects/ecosystem_biology/local_tools/standard-RAxML
+
+setenv AMPHORA2_home .
